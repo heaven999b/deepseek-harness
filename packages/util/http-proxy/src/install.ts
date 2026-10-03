@@ -238,6 +238,9 @@ async function installGlobalProxy(policy: ProxyPolicy): Promise<() => Promise<vo
  * not read `ALL_PROXY`, so a child of a parent that resolved its proxy from that name would connect
  * directly while the parent proxies.
  *
+ * A blank value is unset here as in resolution: it names no scheme and is removed from the child, so an
+ * empty lowercase name cannot shadow a populated uppercase one there or withhold the flag.
+ *
  * The bypass list is always the resolved one. It only ever adds the loopback entries to what
  * the user wrote, so nothing is lost, and the child stops sending its own localhost traffic to a
  * proxy that cannot route it.
@@ -264,12 +267,13 @@ export function proxyEnvironmentForChild(): Readonly<Record<string, string | und
   const inherited = inheritedProxyEnv
   if (policy === undefined || policy.source === 'none' || inherited === undefined) return {}
   const overlay: Record<string, string | undefined> = { NODE_USE_ENV_PROXY: '1' }
+  const exported = (name: string): string | undefined => inherited[name]?.trim() ? inherited[name] : undefined
   for (const [field, names] of Object.entries(POLICY_ENV_NAMES)) {
     const resolved = policy[field as keyof typeof POLICY_ENV_NAMES]
     // Naming a scheme in either casing claims that scheme: the child then gets exactly what the
     // user wrote, in the casing they wrote it, rather than a value derived for this process.
-    const named = field !== 'noProxy' && names.some(name => inherited[name] !== undefined)
-    for (const name of names) overlay[name] = named ? inherited[name] : resolved
+    const named = field !== 'noProxy' && names.some(name => exported(name) !== undefined)
+    for (const name of names) overlay[name] = named ? exported(name) : resolved
   }
   const parsedByNode = [...POLICY_ENV_NAMES.httpProxy, ...POLICY_ENV_NAMES.httpsProxy]
   if (parsedByNode.some(name => overlay[name] !== undefined && !isSupportedProxyUrl(overlay[name]))) {

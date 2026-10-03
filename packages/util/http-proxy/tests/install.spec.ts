@@ -9,7 +9,7 @@ import {
   proxyEnvironmentForChild,
   proxyRouteFor,
 } from '../src/index.ts'
-import { PROXY_ENV_NAMES } from '../src/policy.ts'
+import { POLICY_ENV_NAMES, PROXY_ENV_NAMES } from '../src/policy.ts'
 
 /** Absolute-form request targets the fake proxy received; a populated entry proves a request was tunnelled. */
 let proxied: string[] = []
@@ -305,6 +305,30 @@ describe('proxyEnvironmentForChild', () => {
         await dispose()
       }
     })
+  })
+
+  it('treats a blank exported value as unset, so a child Node is not left direct', async () => {
+    // Resolution reads both blank names as unset, so this process proxies each scheme through the
+    // HTTP proxy; the child must agree rather than receive the blank name and lose the flag.
+    for (const exported of [{ http_proxy: '', HTTP_PROXY: proxyUrl }, { HTTP_PROXY: proxyUrl, HTTPS_PROXY: ' ' }]) {
+      await withCleanProxyEnv(async () => {
+        Object.assign(process.env, exported)
+        const { dispose } = await install(env(exported))
+        try {
+          const child = proxyEnvironmentForChild()
+          expect(child.NODE_USE_ENV_PROXY).toBe('1')
+          // Windows folds each pair into one variable, so which spelling carries the value is the
+          // platform's to decide; that no spelling carries anything else is not.
+          for (const names of [POLICY_ENV_NAMES.httpProxy, POLICY_ENV_NAMES.httpsProxy]) {
+            const values = names.map(name => child[name])
+            expect(values).toContain(proxyUrl)
+            expect(values.filter(value => value !== undefined && value !== proxyUrl)).toEqual([])
+          }
+        } finally {
+          await dispose()
+        }
+      })
+    }
   })
 
   it.each(['socks4://127.0.0.1:1080', 'ftp://p:1', 'not a url'])(
