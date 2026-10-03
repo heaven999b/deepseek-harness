@@ -395,6 +395,65 @@ describe('Messages request conversion', () => {
   })
 })
 
+describe('Messages well-formed text', () => {
+  // JSON.stringify writes each unpaired surrogate as a `\udXXX` escape, which the Messages endpoint rejects.
+  const loneEscape = /\\ud[89a-f][0-9a-f]{2}/
+  const high = '\uD83D'
+  const low = '\uDE00'
+
+  it('replaces lone surrogates in text, reasoning, system, tool and stop strings with U+FFFD', () => {
+    const history = [
+      createSystemMessage(`instructions ${low}`),
+      user(`cut ${high}`),
+      createDeveloperMessage({ content: [{ type: 'text', text: `note ${high}` }], source: { kind: 'tool-registry' } }),
+      assistant([
+        { type: 'reasoning', text: `thought ${low}` },
+        { type: 'text', text: `answer ${high}` },
+        { type: 'tool-call', id: ToolCallId('a'), name: 'read', arguments: '{"path":"a\\ud83d","list":["\\ude00b"],"\\ud83dkey":{"deep":"c\\udbff","limit":2}}' },
+      ]),
+      result('a', [{ type: 'text', text: `output ${low}${high}` }]),
+    ]
+    const saved = JSON.stringify(history)
+    const request = body(history, {
+      system: `top ${high}`,
+      stop: [`END${low}`],
+      tools: [{ name: 'read', description: `Read ${high}`, parameters: { type: 'object', properties: { [`p${low}`]: { type: 'string', description: `cut ${high}` } } } }],
+    })
+    expect(request.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'cut \uFFFD' }] },
+      { role: 'system', content: [{ type: 'text', text: 'note \uFFFD' }] },
+      { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'thought \uFFFD' },
+        { type: 'text', text: 'answer \uFFFD' },
+        { type: 'tool_use', id: 'a', name: 'read', input: { 'path': 'a\uFFFD', 'list': ['\uFFFDb'], '\uFFFDkey': { deep: 'c\uFFFD', limit: 2 } } },
+      ] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: [{ type: 'text', text: 'output \uFFFD\uFFFD' }], is_error: false }] },
+    ])
+    expect(request).toMatchObject({
+      system: 'top \uFFFD\n\ninstructions \uFFFD',
+      stop_sequences: ['END\uFFFD'],
+      tools: [{ name: 'read', description: 'Read \uFFFD', input_schema: { type: 'object', properties: { 'p\uFFFD': { type: 'string', description: 'cut \uFFFD' } } } }],
+    })
+    expect(JSON.stringify(request)).not.toMatch(loneEscape)
+    expect(JSON.stringify(history)).toBe(saved)
+  })
+
+  it('replaces lone surrogates in native system updates and keeps pairs joined across system blocks', () => {
+    const split = createMessage({ role: 'system', source: { kind: 'system-prompt' }, content: [
+      { type: 'text', text: `original ${high}` }, { type: 'text', text: `${low} kept` },
+    ] })
+    const request = nativeBody([split, user('first'), assistant([{ type: 'text', text: 'one' }]), createSystemMessage(`updated ${high}`), user('second')])
+    expect(request.system).toBe('original \u{1F600} kept')
+    expect(request.messages.at(-1)).toEqual({ role: 'system', content: [{ type: 'text', text: 'updated \uFFFD' }] })
+    expect(JSON.stringify(request)).not.toMatch(loneEscape)
+  })
+
+  it('sends well-formed text unchanged', () => {
+    const text = 'emoji \u{1F600} and CJK 世界'
+    expect(body([user(text)]).messages).toEqual([{ role: 'user', content: [{ type: 'text', text }] }])
+  })
+})
+
 describe('validated configuration', () => {
   it('advertises exact model metadata and allows unlisted text models', () => {
     expect(modelInfo(connection, 'deepseek-official', MODEL)).toMatchObject({ context: { contextWindow: 1_000_000 }, defaultMaxTokens: 256_000, reasoning: { efforts: [{ id: 'off' }, { id: 'low' }, { id: 'high' }, { id: 'max' }], defaultEffort: 'high' } })
