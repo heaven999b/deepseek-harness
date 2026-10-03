@@ -346,6 +346,17 @@ describe('Zstandard frame structure', () => {
     expect(() => scanZstdFrames(reservedBlock)).toThrow(/reserved block type/)
   })
 
+  it('reports zero-filled bytes after a complete frame as a torn tail', async () => {
+    const frame = await compressZstdFrame('header\n')
+    const zeroTail = Buffer.concat([frame, Buffer.alloc(4096)])
+    expect(scanZstdFrames(zeroTail)).toEqual({
+      frames: [{ start: 0, end: frame.length }],
+      tornStart: frame.length,
+    })
+    expect(() => scanZstdFrames(Buffer.concat([zeroTail, Buffer.from([0x01])]))).toThrow(/invalid frame magic/)
+    expect(() => scanZstdFrames(Buffer.concat([zeroTail, frame]))).toThrow(/invalid frame magic/)
+  })
+
   it('covers standard header variants, RLE blocks, multiple blocks, and checksums', () => {
     for (const descriptor of [0x00, 0x21, 0x42, 0x83, 0xE3]) {
       const frame = emptyStructuralFrame(descriptor)
@@ -708,6 +719,43 @@ describe('JsonlSessionPersistence: default Zstandard encoding', () => {
     expect((await readAll(ctx.sessionPersistence, header.id)).events).toEqual(oneTurnLog())
     // Reads never repair: the torn bytes stay until a write-path append.
     expect(await readFile(path)).toEqual(Buffer.concat([committed, MAGIC.subarray(0, 2)]))
+  })
+
+  it('recovers from a zero-filled tail and truncates it on the next append', async () => {
+    const root = await freshRoot()
+    const ctx = await mount(root)
+    const header = meta('zero-tail', '/proj')
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => undefined)
+    await writeLog(ctx.sessionPersistence, header, oneTurnLog())
+    const path = logPath(root, header.cwd, header.id, 'zstd')
+    const committed = await readFile(path)
+    // A crash after the file grew but before the frame's data reached disk.
+    await appendFile(path, Buffer.alloc(4096))
+
+    expect((await readAll(ctx.sessionPersistence, header.id)).events).toEqual(oneTurnLog())
+    expect(await readFile(path)).toEqual(Buffer.concat([committed, Buffer.alloc(4096)]))
+
+    const secondTurn: SessionEvent[] = [
+      { type: 'turn/start', seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+      { type: 'turn/end', seq: SessionSeq(7), time: 8, data: { turn: 2, reason: { kind: 'completed' } } },
+    ]
+    await appendBatch(ctx.sessionPersistence, header.id, secondTurn)
+    expect(warn).toHaveBeenCalledWith('session-persistence-jsonl: session "zero-tail" recovered from a torn tail; incomplete tail bytes were discarded')
+    const repaired = await readFile(path)
+    expect(repaired.subarray(0, committed.length)).toEqual(committed)
+    expect(scanZstdFrames(repaired).tornStart).toBeUndefined()
+    expect(scanLog(await decodeCompleteFrames(repaired)).events).toEqual([...oneTurnLog(), ...secondTurn])
+  })
+
+  it('rejects zero-filled bytes followed by a later frame as corruption', async () => {
+    const root = await freshRoot()
+    const ctx = await mount(root)
+    const header = meta('zero-gap')
+    await writeLog(ctx.sessionPersistence, header, oneTurnLog())
+    const later = await compressZstdFrame(`${JSON.stringify({ type: 'turn/start', seq: 6, time: 7, data: { turn: 2 } })}\n`)
+    await appendFile(logPath(root, header.cwd, header.id, 'zstd'), Buffer.concat([Buffer.alloc(16), later]))
+
+    await expect(readAll(ctx.sessionPersistence, header.id)).rejects.toThrow(/invalid frame magic/)
   })
 
   it('recovers a final frame torn at its checksum byte in full', async () => {

@@ -34,16 +34,19 @@ export interface ZstdFrameRange {
 export interface ZstdFrameScan {
   /** Complete frames in file order. */
   frames: ZstdFrameRange[]
-  /** Start of an incomplete final frame, when EOF interrupts one. */
+  /** Start of the torn tail: an incomplete final frame, or zero-filled bytes after the last complete frame. */
   tornStart?: number
 }
 
 /**
  * Locate complete frames without decompressing their blocks. Invalid complete
  * structure rejects; EOF inside the final frame returns its start for repair.
+ * Zero-filled bytes running from the end of a complete frame to EOF also
+ * return their start: a crash can persist a file's extended length before the
+ * appended frame's data, and every committed frame begins with the magic.
  * @param buffer - complete bytes currently present in the session artifact.
  * @param maxFrames - optional complete-frame limit for metadata-only readers.
- * @returns complete frame ranges and an optional incomplete-final-frame start.
+ * @returns complete frame ranges and an optional torn-tail start.
  */
 export function scanZstdFrames(buffer: Buffer, maxFrames = Number.POSITIVE_INFINITY): ZstdFrameScan {
   const frames: ZstdFrameRange[] = []
@@ -53,6 +56,7 @@ export function scanZstdFrames(buffer: Buffer, maxFrames = Number.POSITIVE_INFIN
     const start = offset
     if (buffer.length - offset < 4) return { frames, tornStart: start }
     if (buffer.readUInt32LE(offset) !== ZSTD_MAGIC) {
+      if (frames.length > 0 && buffer.subarray(offset).every(byte => byte === 0)) return { frames, tornStart: start }
       throw new Error(`corrupt Zstandard session log: invalid frame magic at byte ${offset}`)
     }
     offset += 4

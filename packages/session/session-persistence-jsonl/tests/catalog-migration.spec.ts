@@ -190,7 +190,7 @@ describe.each(['none', 'zstd'] as const)('historical catalog publication (%s)', 
   it.skipIf(compression !== 'zstd')('isolates invalid compressed child frames', async () => {
     const f = await fixture()
     const childPath = await f.write('child', [], true)
-    await writeFile(childPath, Buffer.concat([await readFile(childPath), Buffer.alloc(8)]))
+    await writeFile(childPath, Buffer.concat([await readFile(childPath), Buffer.alloc(8, 0xFF)]))
     expect(await f.read()).toMatchObject([{ type: 'subagent/catalog', data: { childId: 'child', mode: 'unknown' } }])
     await expect(f.ctx.sessionPersistence.open(SessionId('child'), 'read')).rejects.toBeInstanceOf(SessionPersistenceCorruptionError)
   })
