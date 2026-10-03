@@ -119,6 +119,55 @@ describe('modern MCP connections', () => {
     expect(read).toMatchObject({ isError: false, value: { contents: [{ uri: 'memo://readme', text: 'memo' }] } })
   })
 
+  it('lists one page per call and returns each continuation cursor', async () => {
+    // One page more than the SDK's default `listMaxPages`, which caps its cursor-less aggregation.
+    const pages = 65
+    const server = new McpServer({ name: 'paged', version: '1' })
+    server.registerResource('memo', 'memo://readme', {}, async () => ({ contents: [] }))
+    const seen: (string | undefined)[] = []
+    const pageOf = (cursor: string | undefined): { page: number; nextCursor?: string } => {
+      seen.push(cursor)
+      const page = cursor === undefined ? 1 : Number(cursor)
+      return { page, ...page < pages ? { nextCursor: String(page + 1) } : {} }
+    }
+    server.server.setRequestHandler('resources/list', async (request) => {
+      const { page, ...rest } = pageOf(request.params?.cursor)
+      return { resources: [{ name: `r${page}`, uri: `memo://${page}` }], ...rest }
+    })
+    server.server.setRequestHandler('resources/templates/list', async (request) => {
+      const { page, ...rest } = pageOf(request.params?.cursor)
+      return { resourceTemplates: [{ name: `t${page}`, uriTemplate: `memo://${page}/{id}` }], ...rest }
+    })
+    const ctx = await connect(server, { resources: true })
+    const list = async (name: string, cursor?: string): Promise<{ items: unknown[]; nextCursor?: string }> => {
+      const result = await ctx.tools.execute({
+        name, arguments: { server: 'fixture', ...cursor === undefined ? {} : { cursor } },
+        callId: ToolCallId(name), signal: new AbortController().signal,
+      })
+      if (result.isError) throw new Error(result.error.message)
+      const { resources, resourceTemplates, nextCursor } = result.value as {
+        resources?: unknown[]
+        resourceTemplates?: unknown[]
+        nextCursor?: string
+      }
+      return { items: resources ?? resourceTemplates ?? [], ...nextCursor === undefined ? {} : { nextCursor } }
+    }
+    for (const [name, prefix] of [['list_mcp_resources', 'r'], ['list_mcp_resource_templates', 't']] as const) {
+      seen.length = 0
+      expect(await list(name)).toEqual({ items: [expect.objectContaining({ name: `${prefix}1` })], nextCursor: '2' })
+      expect(seen).toEqual([undefined])
+      const items: unknown[] = []
+      let cursor: string | undefined = '2'
+      while (cursor !== undefined) {
+        const page = await list(name, cursor)
+        items.push(...page.items)
+        cursor = page.nextCursor
+      }
+      expect(items).toHaveLength(pages - 1)
+      expect(seen).toEqual([undefined, ...Array.from({ length: pages - 1 }, (_, index) => String(index + 2))])
+    }
+  })
+
   it('updates tools through the SDK modern list-change subscription', async () => {
     const server = new McpServer({ name: 'tools', version: '1' })
     server.registerTool('first', { inputSchema: z.object({}) }, async () => ({ content: [] }))

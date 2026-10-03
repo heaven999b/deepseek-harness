@@ -370,13 +370,17 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
         const options = { signal: exec.signal, timeout: config.toolCallTimeoutMs }
         switch (request.method) {
           case 'resources/list':
-            return await generation.listResources(
-              request.cursor === undefined ? undefined : { cursor: request.cursor }, options,
-            ) as JsonValue
           case 'resources/templates/list':
-            return await generation.listResourceTemplates(
-              request.cursor === undefined ? undefined : { cursor: request.cursor }, options,
-            ) as JsonValue
+            // One page per call, carrying the server's `nextCursor`: the SDK's cursor-less list
+            // methods merge every page, drop that cursor, and fail past their page cap. Like
+            // them, a server without the resources capability lists nothing.
+            if (!generation.getServerCapabilities()?.resources) {
+              return request.method === 'resources/list' ? { resources: [] } : { resourceTemplates: [] }
+            }
+            return await generation.request({
+              method: request.method,
+              ...request.cursor === undefined ? {} : { params: { cursor: request.cursor } },
+            }, options) as JsonValue
           case 'resources/read':
             return await generation.readResource({ uri: request.uri }, options) as JsonValue
           /* v8 ignore next 2 -- resource requests are the closed, typed tool operation union */
