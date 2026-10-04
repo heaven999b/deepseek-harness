@@ -99,6 +99,18 @@ describe('Messages request extensions', () => {
     expect(JSON.parse(body)).toMatchObject({ dsh_messages_test: { value: 'inventory' } })
   })
 
+  it('replaces lone surrogates in extension fields with U+FFFD', async () => {
+    const ctx = await boot()
+    ctx.deepseekLlmApiExtensions.register('dsh_messages_test', { prepare: () => ({ value: { value: 'log \uD83D' } }) })
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(sse(textEvents)))
+    vi.stubGlobal('fetch', fetch)
+    await assemble(ctx.llm.stream(options()))
+    const body = fetch.mock.calls[0]?.[1]?.body
+    if (typeof body !== 'string') throw new Error('Expected a serialized Messages request')
+    expect(body).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/)
+    expect(JSON.parse(body)).toMatchObject({ dsh_messages_test: { value: 'log \uFFFD' } })
+  })
+
   it('sends the request without a field whose preparation throws', async () => {
     const ctx = await boot()
     ctx.deepseekLlmApiExtensions.register('dsh_messages_test', { prepare() { throw new Error('inventory unavailable') } })

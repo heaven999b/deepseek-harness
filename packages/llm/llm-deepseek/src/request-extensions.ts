@@ -3,14 +3,17 @@
 import { errorChain, LlmError } from '@deepseek-ai/dsh-llm'
 import type { DeepSeekLlmApiExtensionRequest, PreparedDeepSeekLlmApiExtensions } from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
 import type { DeepSeekAdapterOptions } from './types.ts'
+import { wellFormedObject } from './well-formed.ts'
 
 /**
- * Merge contributions without replacing Messages fields. A rejected preparation or
- * a base-field collision reports REQUEST_EXTENSION with the cause chain appended to
- * the message. When the merged request fails to serialize, the payload is the
- * base request alone and acceptance is a no-op, so contributors resend their
- * unaccepted state on a later request. An acceptance failure is reported and
- * does not fail the request.
+ * Merge contributions without replacing Messages fields. Each lone UTF-16
+ * surrogate in a contributed member name or string becomes U+FFFD, as in the
+ * base request. A rejected preparation or a base-field collision reports
+ * REQUEST_EXTENSION with the cause chain appended to the message. When the
+ * merged request fails to serialize, the payload is the base request alone and
+ * acceptance is a no-op, so contributors resend their unaccepted state on a
+ * later request. An acceptance failure is reported and does not fail the
+ * request.
  * @param body - serialized Messages request before extension fields.
  * @param options - request identity, purpose, and cancellation.
  * @param prepare - contributor registry captured for this adapter.
@@ -39,7 +42,7 @@ export async function prepareRequestExtensions(
   }
   let payload: string
   try {
-    payload = JSON.stringify({ ...body, ...extensions.fields })
+    payload = JSON.stringify({ ...body, ...wellFormedObject(extensions.fields) })
   } catch (error) {
     // A base request that cannot serialize throws here, before any field is reported as omitted.
     const base = JSON.stringify(body)

@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import LlmRuntime from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage } from '@deepseek-ai/dsh-llm'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
@@ -193,6 +193,29 @@ describe('llm-deepseek real dynamic composition', () => {
       events: [{ type: 'turn/start', seq: 0 }],
     })
     expect(SessionLogDeepSeek.acceptedThrough(session)).toBe(0)
+  })
+
+  it('sends a lone surrogate from the canonical session as U+FFFD in messages and the session log', async () => {
+    vi.stubEnv('DEEPSEEK_API_KEY', 'entry-key')
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    const { ctx } = await loadComposition({ withDynamic: false, baseURL: server.url })
+    const session = ctx.sessions.create(SessionId('extension-composition-lone-surrogate'))
+    // A code-unit cut through an emoji keeps only its high surrogate.
+    const message = createUserMessage({ content: [{ type: 'text', text: `cut ${'\u{1F600}'.slice(0, 1)}` }], source: { kind: 'user' } })
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', message, { surfaceOp: 'append' })
+
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [message], sessionId: session.id })
+    expect(result.finish.kind).toBe('stop')
+    const request = server.requests[0] as {
+      messages: unknown
+      dsh_session_log: { events: Array<{ type: string; data: { content?: unknown } }> }
+    }
+    expect(request.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'cut \uFFFD' }] }])
+    expect(request.dsh_session_log.events.map(event => event.type)).toEqual(['turn/start', 'user/message'])
+    expect(request.dsh_session_log.events[1]?.data.content).toEqual([{ type: 'text', text: 'cut \uFFFD' }])
+    expect(JSON.stringify(request)).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/)
+    expect(session.snapshotEvents()[1]?.data).toEqual(message)
   })
 
   it('boots from cordis.yml and routes the next request after external settings and credential edits', async () => {
