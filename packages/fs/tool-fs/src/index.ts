@@ -14,6 +14,7 @@ import { applyWriteTool } from './write.ts'
 import { applyEditTool } from './edit.ts'
 import { applyReadImageTool } from './read-image.ts'
 import { READ_MAX_BYTES, READ_MAX_LINE_LENGTH } from './read-render.ts'
+import { DIFF_TIMEOUT_MS } from './diff.ts'
 import { FsSandboxController } from './sandbox.ts'
 
 /** Cordis plugin name used by loader diagnostics. */
@@ -32,6 +33,8 @@ export interface Config {
   readMaxBytes?: number
   /** Files at or above this size stream instead of loading whole into memory. */
   readStreamMinSize?: number
+  /** Milliseconds a `write`/`edit` result-card line diff may run before it degrades to a whole-file or generic card. */
+  diffTimeoutMs?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -39,6 +42,7 @@ export const Config: z<Config> = z.object({
   readMaxLineLength: z.number().default(READ_MAX_LINE_LENGTH),
   readMaxBytes: z.number().default(READ_MAX_BYTES),
   readStreamMinSize: z.number().default(STREAM_MIN_SIZE),
+  diffTimeoutMs: z.number().default(DIFF_TIMEOUT_MS),
 })
 
 /** The shape after schemastery applied the defaults. */
@@ -59,6 +63,7 @@ export function apply(ctx: Context, config: Config): void {
   assertPositiveInteger('readMaxLineLength', resolved.readMaxLineLength)
   assertPositiveInteger('readMaxBytes', resolved.readMaxBytes)
   assertPositiveInteger('readStreamMinSize', resolved.readStreamMinSize)
+  assertPositiveInteger('diffTimeoutMs', resolved.diffTimeoutMs)
   applyReadTool(ctx, {
     limit: resolved.readLimit,
     maxLineLength: resolved.readMaxLineLength,
@@ -75,6 +80,6 @@ export function apply(ctx: Context, config: Config): void {
   // per-call policy resolution, and denial-marker mapping, all keyed off whether
   // the mounted ctx.fs confines (ctx.fs.sandboxMode).
   const sandbox = new FsSandboxController(ctx)
-  applyWriteTool(ctx, sandbox)
-  applyEditTool(ctx, sandbox)
+  applyWriteTool(ctx, sandbox, resolved.diffTimeoutMs)
+  applyEditTool(ctx, sandbox, resolved.diffTimeoutMs)
 }

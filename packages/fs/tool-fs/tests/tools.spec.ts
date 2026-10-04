@@ -733,6 +733,59 @@ describe('result-time contextual diff (meta + presentResult)', () => {
   })
 })
 
+describe('diff timeout degrades the result card instead of blocking', () => {
+  async function setupTimeout(diffTimeoutMs: number) {
+    const ctx = new Context()
+    provideWorkingDirectoryFixture(ctx)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(FakeFs)
+    await ctx.plugin(FsPolicy)
+    await ctx.plugin(ToolFs, { diffTimeoutMs })
+    return { ctx, fs: ctx.fs as FakeFs }
+  }
+
+  // A 4000-line near-total change is near-quadratic to diff; a 1 ms budget cannot
+  // finish it on any machine, so the comparison degrades to no hunks quickly.
+  const big = (token: string) => Array.from({ length: 4_000 }, (_, i) => `${token}-${i}-${(i * 2654435761) % 1000}`).join('\n') + '\n'
+
+  it('write overwrite: a timed-out diff leaves empty meta and presentResult falls back to the whole-file card', async () => {
+    const { ctx, fs } = await setupTimeout(1)
+    const session = { header: {} }
+    fs.files.set('key:data.json', big('old'))
+    await call(ctx, 'read', { file_path: 'data.json' }, { session })
+    const replacement = big('new')
+    const started = performance.now()
+    const result = await call(ctx, 'write', { file_path: 'data.json', content: replacement }, { session })
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(result.isError).toBe(false)
+    // The overwrite applied and is recorded as an update, but the hunk list timed out to empty.
+    expect(result.meta).toEqual({ operation: 'update', path: '/abs/data.json', diffs: [] })
+    const view = ctx.tools.get('write')?.presentResult?.({ file_path: 'data.json', content: replacement }, result)
+    expect(view).toEqual({ card: 'diff', title: 'Write data.json', diffs: [{ path: '/abs/data.json', oldText: null, newText: replacement }] })
+  })
+
+  it('edit replace_all: a timed-out diff leaves empty meta and presentResult falls back to the generic card', async () => {
+    const { ctx, fs } = await setupTimeout(1)
+    const session = { header: {} }
+    fs.files.set('key:messages.ts', big('oldName'))
+    await call(ctx, 'read', { file_path: 'messages.ts' }, { session })
+    const result = await call(ctx, 'edit', { file_path: 'messages.ts', old_string: 'oldName', new_string: 'newName', replace_all: true }, { session })
+    expect(result.isError).toBe(false)
+    expect(result.meta).toEqual({ path: '/abs/messages.ts', diffs: [] })
+    expect(ctx.tools.get('edit')?.presentResult?.({ file_path: 'messages.ts', old_string: 'oldName', new_string: 'newName' }, result)).toBeUndefined()
+  })
+
+  it('an ample budget still renders the applied hunk card', async () => {
+    const { ctx, fs } = await setupTimeout(5_000)
+    const session = { header: {} }
+    fs.files.set('key:a.txt', 'a\nb\nc\nOLD\nd\ne\nf\n')
+    await call(ctx, 'read', { file_path: 'a.txt' }, { session })
+    const result = await call(ctx, 'edit', { file_path: 'a.txt', old_string: 'OLD', new_string: 'NEW' }, { session })
+    expect(result.meta).toEqual({ path: '/abs/a.txt', diffs: [{ path: '/abs/a.txt', oldText: 'a\nb\nc\nOLD\nd\ne\nf', newText: 'a\nb\nc\nNEW\nd\ne\nf' }] })
+  })
+})
+
 describe('read caps are plugin config', () => {
   async function setupWith(config: ToolFs.Config) {
     const ctx = new Context()
@@ -792,6 +845,8 @@ describe('read caps are plugin config', () => {
     ['readMaxLineLength', { readMaxLineLength: -1 }],
     ['readMaxBytes', { readMaxBytes: Number.NaN }],
     ['readStreamMinSize', { readStreamMinSize: 0 }],
+    ['diffTimeoutMs', { diffTimeoutMs: 0 }],
+    ['diffTimeoutMs', { diffTimeoutMs: 2.5 }],
   ] as const)('rejects a non-positive or fractional %s at load', async (name, config) => {
     const ctx = new Context()
     provideWorkingDirectoryFixture(ctx)

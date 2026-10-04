@@ -62,6 +62,7 @@ All keys are optional; the defaults are the shipped read caps.
 | `readMaxLineLength` | `2000` | Characters kept per line before truncation |
 | `readMaxBytes` | `51200` | Byte cap on one `read` call's selected lines; overflow ends the window with a capped footer |
 | `readStreamMinSize` | `10485760` | Files at or above this size (or of unknown size) stream instead of loading whole into memory |
+| `diffTimeoutMs` | `100` | Milliseconds a `write`/`edit` result-card line diff may run before it degrades to a whole-file (`write`) or generic (`edit`) card |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-fs) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -247,7 +248,7 @@ These limits define when the tool suite is a poor fit or needs special operation
 - **Object paths re-enter source admission** — `read_image` on a normalized attachment object re-admits its bytes as a new source, so a deployment whose `maxImageBytes`/`maxMessageImageBytes` sit below the normalized-image byte budget can refuse an object path that `ctx.attachments.readImage` still serves; shipped defaults keep the normalized budget (4 MiB) far under the source caps (20 MiB).
 - **Inline image preview rides the UI composition** — the tool-result card renders the image through the browser's `tool.call.images` slot, which the attachment presentation plugin fills; a UI without that plugin shows the result's envelope text instead.
 - **No attachment-region tool** — an agent may crop an image through another available tool when it has a filesystem path; a pasted or dragged image without a path cannot be re-read at higher resolution.
-- **No timeout surface** — `read`/`write`/`edit` take no timeout argument and declare no timeout budget; cancellation rides `exec.signal` only ([provider rationale](../README.md)).
+- **No tool-call timeout surface** — `read`/`write`/`edit` take no timeout argument and declare no tool-call timeout budget; cancellation rides `exec.signal` only ([provider rationale](../README.md)). The separate `diffTimeoutMs` bounds only the synchronous result-card line diff, degrading it to a whole-file or generic card; it never cancels the write or edit itself.
 
 <a id="dev-note"></a>
 ### Dev Note

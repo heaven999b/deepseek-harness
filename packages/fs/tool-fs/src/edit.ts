@@ -72,8 +72,9 @@ export function formatEditOutput(displayPath: string, replaceAll: boolean): stri
  * Register the `edit` tool and its scope-aware system-prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
  * @param sandbox - the shared sandbox-escalation API (advertisement, mode stamping, denial mapping).
+ * @param diffTimeoutMs - milliseconds the result-card line diff may run before it degrades to a generic card.
  */
-export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void {
+export function applyEditTool(ctx: Context, sandbox: FsSandboxController, diffTimeoutMs: number): void {
   ctx.systemPrompt.section({
     name: 'tool:edit',
     order: ctx.systemPrompt.getSectionOrder('TOOL_EDIT'),
@@ -112,7 +113,7 @@ export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void 
       }],
       presentationMeta: (_args, value) => ({
         path: value.path,
-        diffs: computeHunkDiffs(value.path, value.before, value.after)
+        diffs: computeHunkDiffs(value.path, value.before, value.after, diffTimeoutMs)
           .map(({ path, oldText, newText }) => ({ path, oldText, newText })),
       }),
     },

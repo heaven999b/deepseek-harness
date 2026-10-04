@@ -58,8 +58,9 @@ interface WriteToolArgs {
  * Register the `write` tool and its scope-aware system-prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
  * @param sandbox - the shared sandbox-escalation API (advertisement, mode stamping, denial mapping).
+ * @param diffTimeoutMs - milliseconds the result-card line diff may run before it degrades to a whole-file card.
  */
-export function applyWriteTool(ctx: Context, sandbox: FsSandboxController): void {
+export function applyWriteTool(ctx: Context, sandbox: FsSandboxController, diffTimeoutMs: number): void {
   ctx.systemPrompt.section({
     name: 'tool:write',
     order: ctx.systemPrompt.getSectionOrder('TOOL_WRITE'),
@@ -105,7 +106,7 @@ export function applyWriteTool(ctx: Context, sandbox: FsSandboxController): void
         path: value.path,
         diffs: value.before === null
           ? []
-          : computeHunkDiffs(value.path, value.before, value.after)
+          : computeHunkDiffs(value.path, value.before, value.after, diffTimeoutMs)
             .map(({ path, oldText, newText }) => ({ path, oldText, newText })),
       }),
     },

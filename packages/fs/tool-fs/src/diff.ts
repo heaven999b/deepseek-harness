@@ -11,6 +11,18 @@ import type { FileDiff } from '@deepseek-ai/dsh-tools'
 export const DIFF_CONTEXT = 3
 
 /**
+ * Default milliseconds the result-card line diff may run (the `diffTimeoutMs`
+ * config). Myers diff is O(N*D), so overwriting or rewriting a large file is
+ * near-quadratic; without a budget it runs synchronously on the single host
+ * thread for seconds to minutes, freezing every session. A comparison that
+ * exceeds the budget degrades to no hunks, and the tools fall back to a
+ * whole-file (`write`) or generic (`edit`) card. 100 ms comfortably covers a
+ * normal targeted edit, whose edit distance is tiny; only a near-total rewrite
+ * reaches it. Mirrors `@deepseek-ai/dsh-workspace-changes`'s `diffTimeoutMs`.
+ */
+export const DIFF_TIMEOUT_MS = 100
+
+/**
  * The `write`/`edit` tools' private `tool/result` `meta` payload: the applied
  * contextual-diff hunks, and for `write` whether the call created or updated
  * the file, which tells an empty hunk list of a create from one of an
@@ -26,14 +38,22 @@ export type FsDiffMeta = { diffs: FileDiff[]; operation?: 'create' | 'update' }
  * applied change plus {@link DIFF_CONTEXT} context lines. Pure insertions use `oldText: null`,
  * patch-only no-newline markers are omitted, and scattered replacements remain separate hunks.
  *
+ * The line comparison is bounded by `timeoutMs`: a comparison that exceeds it yields no hunks,
+ * the same result as identical texts, so a near-total rewrite of a large file cannot freeze the
+ * host thread. The empty result degrades to a whole-file (`write`) or generic (`edit`) card.
+ *
  * @param path - the path stamped on every produced diff (the model-facing `file_path`; the
  *   bridge relativizes it).
  * @param before - the file text before the change (the backend's LF-normalized diff basis).
  * @param after - the file text after the change, on the same basis.
- * @returns one diff per applied hunk, in file order; empty when the texts are identical.
+ * @param timeoutMs - milliseconds the line comparison may run before it degrades to no hunks.
+ * @returns one diff per applied hunk, in file order; empty when the texts are identical or the
+ *   comparison timed out.
  */
-export function computeHunkDiffs(path: string, before: string, after: string): FileDiff[] {
-  const patch = structuredPatch('', '', before, after, undefined, undefined, { context: DIFF_CONTEXT })
+export function computeHunkDiffs(path: string, before: string, after: string, timeoutMs: number): FileDiff[] {
+  const patch = structuredPatch('', '', before, after, undefined, undefined, { context: DIFF_CONTEXT, timeout: timeoutMs })
+  // A timed-out comparison returns undefined; treat it as no hunks so the card degrades.
+  if (patch === undefined) return []
   const diffs: FileDiff[] = []
   for (const hunk of patch.hunks) {
     const oldLines: string[] = []

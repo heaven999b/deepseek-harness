@@ -62,6 +62,7 @@ kind: "package-reference"
 | `readMaxLineLength` | `2000` | 每行截断前保留的字符数 |
 | `readMaxBytes` | `51200` | 一次 `read` 调用所选行的字节上限；溢出时以「已达上限」footer 结束窗口 |
 | `readStreamMinSize` | `10485760` | 大于等于该大小或大小未知的文件采用流式读取，而不是整体加载到内存 |
+| `diffTimeoutMs` | `100` | `write`/`edit` 结果卡片逐行 diff 的运行毫秒上限，超时后退化为整文件（`write`）或通用（`edit`）卡片 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-tool-fs)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -247,7 +248,7 @@ Read a file before editing it (the default fs-observation-policy requires it), u
 - **对象路径重新走源准入**：对规范化附件对象调用 `read_image` 会把其字节作为新来源重新准入，因此把 `maxImageBytes`/`maxMessageImageBytes` 配置得低于规范化图片字节预算的部署可能拒绝 `ctx.attachments.readImage` 仍可读取的对象路径；默认配置下规范化预算（4 MiB）远低于源上限（20 MiB）。
 - **内嵌图像预览依赖 UI 组合**：工具结果卡片经由浏览器的 `tool.call.images` 槽位渲染图像，由附件呈现插件填充；未组合该插件的 UI 改为显示结果的信封文本。
 - **没有附件区域工具**：agent 在拥有文件系统路径时可以通过其他可用工具裁剪图片；没有路径的粘贴或拖入图片无法按更高分辨率重新读取。
-- **没有超时接口**：`read`/`write`/`edit` 不接受超时参数，也不声明超时预算；取消只通过 `exec.signal` 传递（见[提供方理由](../README.zh.md)）。
+- **没有工具调用超时接口**：`read`/`write`/`edit` 不接受超时参数，也不声明工具调用超时预算；取消只通过 `exec.signal` 传递（见[提供方理由](../README.zh.md)）。单独的 `diffTimeoutMs` 只限制同步的结果卡片逐行 diff，超时后退化为整文件或通用卡片，绝不取消写入或编辑本身。
 
 <a id="dev-note"></a>
 ### 开发备注
